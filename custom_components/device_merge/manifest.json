@@ -1,7 +1,7 @@
 {
   "domain": "device_merge",
   "name": "Device Merge",
-  "codeowners": [],
+  "codeowners": ["@frosbe"],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/frosbe/device-merge",
