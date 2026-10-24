@@ -26,6 +26,12 @@ class MergedSensor(MergedEntity, SensorEntity):
         self._attr_state_class = (primary.capabilities or {}).get("state_class")
         self._attr_options = (primary.capabilities or {}).get("options")
 
+    async def async_added_to_hass(self) -> None:
+        # Some sources (e.g. template helpers) keep their unit out of the registry; take it from the state.
+        if self._attr_native_unit_of_measurement is None and (state := self.primary_state) is not None:
+            self._attr_native_unit_of_measurement = state.attributes.get("unit_of_measurement")
+        await super().async_added_to_hass()
+
     def _read(self, state: State):
         if self.device_class == SensorDeviceClass.TIMESTAMP:
             return dt_util.parse_datetime(state.state)
