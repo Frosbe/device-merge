@@ -32,11 +32,12 @@ from .const import (
     STRATEGY_SEPARATE,
     STRATEGY_SINGLE,
 )
-from .matching import Candidate, Group, auto_match, build_groups, collect, compatible, ref_key
+from .matching import Candidate, Group, auto_match, build_groups, collect, compatible, device_legend, ref_key
 
 CONF_PAIRING = "pairing"
 CONF_EXCLUDED = "excluded"
 OWN = "__own__"
+MAX_VALUE_LEN = 24
 
 
 def _general_schema(defaults: dict[str, Any], with_devices: bool) -> vol.Schema:
@@ -77,12 +78,30 @@ class _MergeSteps:
     _pairing: dict[str, str]
     _groups: list[Group]
     _strategies: dict[str, str]
+    _legend: str
+    _shown: dict[str, dict[str, Any]]
 
     def _start_matching(self) -> None:
         self._candidates = collect(self.hass, self._opts[CONF_DEVICES])
+        self._legend = device_legend(self.hass, self._opts[CONF_DEVICES])
+        self._shown = {}
         refs = {ref_key(c) for c in self._candidates}
         previous = {k: v for k, v in self._previous.get(CONF_PAIRING, {}).items() if k in refs}
         self._pairing = previous if self._previous.get(CONF_PAIRING) is not None else auto_match(self._candidates)
+
+    def _value(self, cand: Candidate) -> str:
+        """Current value of a candidate, for the labels."""
+        state = self.hass.states.get(cand.entry.entity_id)
+        if state is None:
+            return "?"
+        unit = state.attributes.get("unit_of_measurement")
+        text = f"{state.state} {unit}" if unit else state.state
+        return text if len(text) <= MAX_VALUE_LEN else f"{text[: MAX_VALUE_LEN - 3]}..."
+
+    def _show(self, step_id: str, fields: dict[str, Any], schema: vol.Schema) -> ConfigFlowResult:
+        """Show a step and remember its labels: they hold live values, so they are not rebuilt on submit."""
+        self._shown[step_id] = fields
+        return self.async_show_form(step_id=step_id, data_schema=schema, description_placeholders={"legend": self._legend})
 
     # Step: which later-device entity merges into which earlier one
     def _pairing_fields(self) -> dict[str, tuple[Candidate, list[Candidate]]]:
@@ -93,11 +112,12 @@ class _MergeSteps:
                 continue
             options = [c for c in self._candidates if c.device_index < cand.device_index and compatible(c, cand)]
             if options:
-                fields[_unique(cand.label, used)] = (cand, options)
+                fields[_unique(f"{cand.label} = {self._value(cand)}", used)] = (cand, options)
         return fields
 
     async def async_step_pairing(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        fields = self._pairing_fields()
+        fields = self._shown.get("pairing") if user_input is not None else None
+        fields = fields or self._pairing_fields()
         if user_input is not None or not fields:
             if user_input is not None:
                 for label, (cand, _options) in fields.items():
@@ -111,11 +131,13 @@ class _MergeSteps:
         schema: dict[Any, Any] = {}
         for label, (cand, options) in fields.items():
             select_options = [selector.SelectOptionDict(value=OWN, label="(own entity, not merged)")]
-            select_options += [selector.SelectOptionDict(value=ref_key(o), label=o.label) for o in options]
+            select_options += [
+                selector.SelectOptionDict(value=ref_key(o), label=f"{o.label} = {self._value(o)}") for o in options
+            ]
             schema[vol.Required(label, default=self._pairing.get(ref_key(cand), OWN))] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=select_options, mode=selector.SelectSelectorMode.DROPDOWN)
             )
-        return self.async_show_form(step_id="pairing", data_schema=vol.Schema(schema))
+        return self._show("pairing", fields, vol.Schema(schema))
 
     # Step: how each merged value is combined
     def _strategy_fields(self) -> dict[str, Group]:
@@ -123,12 +145,13 @@ class _MergeSteps:
         out: dict[str, Group] = {}
         for group in self._groups:
             if len(group.members) > 1:
-                devices = " + ".join(dict.fromkeys(m.device_name for m in group.members))
-                out[_unique(f"{group.name} [{group.domain}] ({devices})", used)] = group
+                values = ", ".join(f"{m.device_tag} {self._value(m)}" for m in group.members)
+                out[_unique(f"{group.name} ({group.domain}): {values}", used)] = group
         return out
 
     async def async_step_strategies(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        fields = self._strategy_fields()
+        fields = self._shown.get("strategies") if user_input is not None else None
+        fields = fields or self._strategy_fields()
         previous = self._previous.get("strategies_by_anchor", {})
         if user_input is not None or not fields:
             self._strategies = {}
@@ -145,7 +168,7 @@ class _MergeSteps:
             schema[vol.Required(label, default=default)] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=options, mode=selector.SelectSelectorMode.DROPDOWN)
             )
-        return self.async_show_form(step_id="strategies", data_schema=vol.Schema(schema))
+        return self._show("strategies", fields, vol.Schema(schema))
 
     # Step: which unmerged entities to include
     def _single_candidates(self) -> list[Candidate]:
@@ -162,7 +185,7 @@ class _MergeSteps:
             chosen = set(user_input.get("include", [])) if user_input is not None else {ref_key(c) for c in singles}
             excluded = [ref_key(c) for c in singles if ref_key(c) not in chosen]
             return self._finish(excluded)
-        options = [selector.SelectOptionDict(value=ref_key(c), label=c.label) for c in singles]
+        options = [selector.SelectOptionDict(value=ref_key(c), label=f"{c.label} = {self._value(c)}") for c in singles]
         default = [ref_key(c) for c in singles if ref_key(c) not in excluded_before]
         schema = vol.Schema(
             {
@@ -171,7 +194,7 @@ class _MergeSteps:
                 )
             }
         )
-        return self.async_show_form(step_id="entities", data_schema=schema)
+        return self._show("entities", {}, schema)
 
     def _finish(self, excluded: list[str]) -> ConfigFlowResult:
         prior_ids = {e[E_KEY]: e[E_ENTITY_ID] for e in self._previous.get(CONF_ENTITIES, [])}

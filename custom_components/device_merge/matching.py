@@ -8,6 +8,7 @@ import re
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.loader import IntegrationNotLoaded, async_get_loaded_integration
 from homeassistant.util import slugify
 
 from .const import DOMAIN, NUMERIC_STRATEGIES, ONOFF_STRATEGIES, OTHER_STRATEGIES, PLATFORMS
@@ -31,6 +32,11 @@ class Candidate:
     device_name: str
 
     @property
+    def device_tag(self) -> str:
+        """A, B, C... so devices with the same name stay apart."""
+        return device_tag(self.device_index)
+
+    @property
     def ref(self) -> list[str]:
         return [self.entry.domain, self.entry.platform, self.entry.unique_id]
 
@@ -44,7 +50,7 @@ class Candidate:
 
     @property
     def label(self) -> str:
-        return f"{self.device_name}: {self.name} ({self.entry.domain})"
+        return f"{self.device_tag}: {self.name} ({self.entry.domain})"
 
 
 @dataclass
@@ -139,6 +145,38 @@ def score(a: Candidate, b: Candidate) -> float:
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / len(ta | tb)
+
+
+def device_tag(index: int) -> str:
+    return chr(ord("A") + index) if index < 26 else str(index + 1)
+
+
+def _integration_name(hass: HomeAssistant, domain: str) -> str:
+    try:
+        return async_get_loaded_integration(hass, domain).name
+    except IntegrationNotLoaded:
+        return domain
+
+
+def device_legend(hass: HomeAssistant, device_ids: list[str]) -> str:
+    """One markdown line per device: tag, name, integration, make/model, entity count."""
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    lines = []
+    for index, device_id in enumerate(device_ids):
+        device = dev_reg.async_get(device_id)
+        if device is None:
+            continue
+        entries = [e for e in er.async_entries_for_device(ent_reg, device_id) if e.disabled_by is None and e.platform != DOMAIN]
+        platforms = list(dict.fromkeys(e.platform for e in entries))
+        integration = ", ".join(_integration_name(hass, p) for p in platforms) or "no entities"
+        details = " ".join(x for x in (device.manufacturer, device.model) if x)
+        extra = f", {details}" if details else ""
+        role = " (owns the controls)" if index == 0 else ""
+        lines.append(
+            f"- **{device_tag(index)}** = {device.name_by_user or device.name}: {integration}{extra}, {len(entries)} entities{role}"
+        )
+    return "\n".join(lines)
 
 
 def collect(hass: HomeAssistant, device_ids: list[str]) -> list[Candidate]:

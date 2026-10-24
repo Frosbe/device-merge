@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Merge devices",
-        "description": "Pick two or more devices, in priority order (the first one owns the controls). The next steps let you pair entities and choose how each pair is combined.",
+        "description": "Pick two or more devices, in priority order (the first one, A, owns the controls). Devices with the same name are told apart by letter (A, B, C) in the next steps, with their integration and model.",
         "data": {
           "name": "Name of the merged device",
           "devices": "Devices to merge",
@@ -16,16 +16,18 @@
       },
       "pairing": {
         "title": "Pair entities",
-        "description": "For each entity of a later device, choose which entity of an earlier device it is the same as, or keep it on its own. Suggestions are pre-filled."
+        "description": "For each entity of a later device, choose which entity of an earlier device it is the same as, or keep it on its own. Suggestions are pre-filled.\n\n{legend}\n\nEach line shows the device letter, the entity, its domain and its current value."
       },
       "strategies": {
         "title": "Combine values",
-        "description": "How should each merged value be combined?"
+        "description": "How should each merged value be combined? The labels show every device's current value.\n\n{legend}"
       },
       "entities": {
         "title": "Other entities",
-        "description": "Entities that only one device has. Ticked ones are added to the merged device.",
-        "data": {"include": "Include"}
+        "description": "Entities that only one device has. Ticked ones are added to the merged device.\n\n{legend}",
+        "data": {
+          "include": "Include"
+        }
       }
     },
     "error": {
@@ -47,16 +49,18 @@
       },
       "pairing": {
         "title": "Pair entities",
-        "description": "For each entity of a later device, choose which entity of an earlier device it is the same as, or keep it on its own."
+        "description": "For each entity of a later device, choose which entity of an earlier device it is the same as, or keep it on its own.\n\n{legend}\n\nEach line shows the device letter, the entity, its domain and its current value."
       },
       "strategies": {
         "title": "Combine values",
-        "description": "How should each merged value be combined?"
+        "description": "How should each merged value be combined? The labels show every device's current value.\n\n{legend}"
       },
       "entities": {
         "title": "Other entities",
-        "description": "Entities that only one device has. Ticked ones are added to the merged device.",
-        "data": {"include": "Include"}
+        "description": "Entities that only one device has. Ticked ones are added to the merged device.\n\n{legend}",
+        "data": {
+          "include": "Include"
+        }
       }
     }
   }

@@ -51,6 +51,7 @@ class MergedEntity(Entity):
         self._spec = spec
         self._strategy = spec.strategy
         self._source_ids = [s.entity_id for s in spec.sources]
+        self._platforms = {s.entity_id: s.platform for s in spec.sources}
         self._primary_id = spec.primary.entity_id
         self._source: State | None = None
         self._value: Any = None
@@ -123,6 +124,7 @@ class MergedEntity(Entity):
         aggregated = self._strategy in AGGREGATES or self._strategy in (STRATEGY_ANY, STRATEGY_ALL)
         return {
             "source": None if aggregated or not self._source else self._source.entity_id,
+            "source_integration": None if aggregated or not self._source else self._platforms.get(self._source.entity_id),
             "sources": self._source_ids,
             "strategy": self._strategy,
         }
