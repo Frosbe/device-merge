@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
-from homeassistant.helpers import selector
+from homeassistant.helpers import entity_registry as er, selector
 from homeassistant.util import slugify
 
 from .const import (
@@ -272,6 +272,14 @@ class _MergeSteps:
     async def _finish(self, excluded: list[str]) -> ConfigFlowResult:
         self._excluded = excluded
         prior_ids = {e[E_KEY]: e[E_ENTITY_ID] for e in self._previous.get(CONF_ENTITIES, [])}
+        if self._previous:
+            # Ids the user renamed in the UI win over the stored ones.
+            ent_reg = er.async_get(self.hass)
+            entry_id = self._previous_entry_id
+            for key in prior_ids:
+                current = ent_reg.async_get_entity_id(key.split(".", 1)[0], DOMAIN, f"{entry_id}_{key}")
+                if current:
+                    prior_ids[key] = current
         name_slug = slugify(self._opts[CONF_NAME])
         used_keys: set[str] = set()
         used_ids: set[str] = set()
@@ -412,6 +420,7 @@ class DeviceMergeOptionsFlow(_MergeSteps, OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         self._previous = dict(self.config_entry.options)
+        self._previous_entry_id = self.config_entry.entry_id
         if user_input is not None:
             self._opts = {**user_input, CONF_DEVICES: self._previous[CONF_DEVICES]}
             self._start_matching()

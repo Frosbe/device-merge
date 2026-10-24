@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+import re
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -96,9 +97,11 @@ async def _prepare(hass: HomeAssistant, entry: DeviceMergeConfigEntry) -> list[M
             strategy=item[E_STRATEGY],
             sources=sources,
         )
-        # Our own entity registered under a fallback id moves to the wanted id once it is free.
+        # Our own entity registered under a fallback id (wanted_id_2) moves to the wanted id once it is free.
+        # Any other id was chosen by the user and is left alone.
         own_id = ent_reg.async_get_entity_id(spec.domain, DOMAIN, spec.unique_id)
-        if own_id and own_id != spec.entity_id and ent_reg.async_get(spec.entity_id) is None:
+        fallback = own_id is not None and re.fullmatch(re.escape(spec.entity_id) + r"_\d+", own_id) is not None
+        if fallback and ent_reg.async_get(spec.entity_id) is None:
             try:
                 ent_reg.async_update_entity(own_id, new_entity_id=spec.entity_id)
             except ValueError:
