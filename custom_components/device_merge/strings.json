@@ -17,7 +17,18 @@
       },
       "pairing": {
         "title": "Pair entities",
-        "description": "Only the pairings the automatic matching is unsure about are shown (all of them if you chose to review everything); the rest uses the suggestions. For each entity, pick the entity of an earlier device it is the same as (likeliest first), or keep it on its own.\n\n{legend}"
+        "description": "Only the pairings the automatic matching is unsure about are shown (all of them if you chose to review everything); the rest uses the suggestions. For each entity, pick the entity of an earlier device it is the same as (likeliest first), or keep it on its own.\n\n{legend}",
+        "sections": {
+          "unsure": {
+            "name": "Unsure, please check"
+          },
+          "auto": {
+            "name": "Paired automatically"
+          },
+          "alone": {
+            "name": "Kept on their own"
+          }
+        }
       },
       "strategies": {
         "title": "Combine values",
@@ -28,6 +39,13 @@
         "description": "Entities that only one device has. Ticked ones are added to the merged device.\n\n{legend}",
         "data": {
           "include": "Include"
+        }
+      },
+      "confirm": {
+        "title": "Check the result",
+        "description": "This is the device that will be created. Values are the current ones.\n\n{legend}\n\n{summary}",
+        "data": {
+          "action": "Next"
         }
       }
     },
@@ -51,7 +69,18 @@
       },
       "pairing": {
         "title": "Pair entities",
-        "description": "Only the pairings the automatic matching is unsure about are shown (all of them if you chose to review everything); the rest uses the suggestions. For each entity, pick the entity of an earlier device it is the same as (likeliest first), or keep it on its own.\n\n{legend}"
+        "description": "Only the pairings the automatic matching is unsure about are shown (all of them if you chose to review everything); the rest uses the suggestions. For each entity, pick the entity of an earlier device it is the same as (likeliest first), or keep it on its own.\n\n{legend}",
+        "sections": {
+          "unsure": {
+            "name": "Unsure, please check"
+          },
+          "auto": {
+            "name": "Paired automatically"
+          },
+          "alone": {
+            "name": "Kept on their own"
+          }
+        }
       },
       "strategies": {
         "title": "Combine values",
@@ -62,6 +91,13 @@
         "description": "Entities that only one device has. Ticked ones are added to the merged device.\n\n{legend}",
         "data": {
           "include": "Include"
+        }
+      },
+      "confirm": {
+        "title": "Check the result",
+        "description": "This is the device that will be created. Values are the current ones.\n\n{legend}\n\n{summary}",
+        "data": {
+          "action": "Next"
         }
       }
     }

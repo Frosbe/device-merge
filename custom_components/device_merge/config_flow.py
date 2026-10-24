@@ -8,6 +8,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
@@ -51,6 +52,12 @@ CONF_EXCLUDED = "excluded"
 CONF_SEEN = "seen"
 OWN = "__own__"
 MAX_VALUE_LEN = 24
+ACTION = "action"
+ACTION_CREATE = "create"
+ACTION_BACK = "back"
+ACTION_REVIEW_ALL = "review_all"
+# Pairing sections, in display order; only "unsure" starts expanded.
+SECTIONS = ("unsure", "auto", "alone")
 
 
 def _general_schema(defaults: dict[str, Any], with_devices: bool) -> vol.Schema:
@@ -72,6 +79,17 @@ def _general_schema(defaults: dict[str, Any], with_devices: bool) -> vol.Schema:
         }
     )
     return vol.Schema(fields)
+
+
+def _flatten(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Form input with sections unpacked."""
+    flat: dict[str, Any] = {}
+    for key, value in user_input.items():
+        if key in SECTIONS and isinstance(value, dict):
+            flat.update(value)
+        else:
+            flat[key] = value
+    return flat
 
 
 def _unique(label: str, used: set[str]) -> str:
@@ -96,12 +114,15 @@ class _MergeSteps:
     _shown: dict[str, dict[str, Any]]
     _unsure: set[str]
     _reviewed: set[str]
+    _result: dict[str, Any]
 
     def _start_matching(self) -> None:
         self._candidates = collect(self.hass, self._opts[CONF_DEVICES])
         self._legend = device_legend(self.hass, self._opts[CONF_DEVICES])
         self._shown = {}
         self._reviewed = set()
+        self._strategies = {}
+        self._excluded: list[str] | None = None
         refs = {ref_key(c) for c in self._candidates}
         suggested, self._unsure = auto_match(self._candidates)
         if self._previous.get(CONF_PAIRING) is not None:
@@ -134,9 +155,9 @@ class _MergeSteps:
         return self.async_show_form(step_id=step_id, data_schema=schema, description_placeholders={"legend": self._legend})
 
     # Step: which later-device entity merges into which earlier one
-    def _pairing_fields(self) -> dict[str, tuple[Candidate, list[Candidate]]]:
+    def _pairing_fields(self) -> dict[str, tuple[Candidate, list[Candidate], str]]:
         used: set[str] = set()
-        fields: dict[str, tuple[Candidate, list[Candidate]]] = {}
+        fields: dict[str, tuple[Candidate, list[Candidate], str]] = {}
         class_counts = class_counter(self._candidates)
         for cand in self._candidates:
             if cand.device_index == 0 or not (self._review_all or ref_key(cand) in self._unsure):
@@ -144,7 +165,9 @@ class _MergeSteps:
             options = [c for c in self._candidates if c.device_index < cand.device_index and compatible(c, cand)]
             options.sort(key=lambda o: affinity(o, cand, class_counts), reverse=True)  # likeliest first
             if options:
-                fields[_unique(f"{cand.label} = {self._value(cand)}", used)] = (cand, options)
+                ref = ref_key(cand)
+                category = "unsure" if ref in self._unsure else "auto" if ref in self._pairing else "alone"
+                fields[_unique(f"{cand.label} = {self._value(cand)}", used)] = (cand, options, category)
         return fields
 
     async def async_step_pairing(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -152,24 +175,32 @@ class _MergeSteps:
         fields = fields or self._pairing_fields()
         if user_input is not None or not fields:
             if user_input is not None:
-                for label, (cand, _options) in fields.items():
-                    choice = user_input.get(label, OWN)
+                flat = _flatten(user_input)
+                for label, (cand, _options, _category) in fields.items():
+                    choice = flat.get(label, OWN)
                     if choice == OWN:
                         self._pairing.pop(ref_key(cand), None)
                     else:
                         self._pairing[ref_key(cand)] = choice
-            self._reviewed = {ref_key(cand) for cand, _options in fields.values()}
+            self._reviewed = {ref_key(cand) for cand, _options, _category in fields.values()}
             self._groups = build_groups(self._candidates, self._pairing)
             return await self.async_step_strategies()
-        schema: dict[Any, Any] = {}
-        for label, (cand, options) in fields.items():
+        by_section: dict[str, dict[Any, Any]] = {name: {} for name in SECTIONS}
+        for label, (cand, options, category) in fields.items():
             select_options = [selector.SelectOptionDict(value=OWN, label="(own entity, not merged)")]
             select_options += [
                 selector.SelectOptionDict(value=ref_key(o), label=f"{o.label} = {self._value(o)}") for o in options
             ]
-            schema[vol.Required(label, default=self._pairing.get(ref_key(cand), OWN))] = selector.SelectSelector(
+            by_section[category][vol.Required(label, default=self._pairing.get(ref_key(cand), OWN))] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=select_options, mode=selector.SelectSelectorMode.DROPDOWN)
             )
+        used = [name for name in SECTIONS if by_section[name]]
+        if len(used) == 1:
+            schema: dict[Any, Any] = by_section[used[0]]
+        else:
+            schema = {
+                vol.Required(name): section(vol.Schema(by_section[name]), {"collapsed": name != "unsure"}) for name in used
+            }
         return self._show("pairing", fields, vol.Schema(schema))
 
     # Step: how each merged value is combined
@@ -186,7 +217,7 @@ class _MergeSteps:
     async def async_step_strategies(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         fields = self._shown.get("strategies") if user_input is not None else None
         fields = fields or self._strategy_fields()
-        previous = self._previous.get("strategies_by_anchor", {})
+        previous = {**self._previous.get("strategies_by_anchor", {}), **self._strategies}
         if user_input is not None or not fields:
             # Groups not on the form keep their earlier choice or get the default.
             self._strategies = {
@@ -219,14 +250,14 @@ class _MergeSteps:
 
     async def async_step_entities(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         singles = self._single_candidates()
-        excluded_before = set(self._previous.get(CONF_EXCLUDED, []))
+        excluded_before = set(self._excluded if self._excluded is not None else self._previous.get(CONF_EXCLUDED, []))
         if not self._review_all and user_input is None:
             # Quick setup: include everything, keeping anything excluded earlier excluded.
-            return self._finish([ref_key(c) for c in singles if ref_key(c) in excluded_before])
+            return await self._finish([ref_key(c) for c in singles if ref_key(c) in excluded_before])
         if user_input is not None or not singles:
             chosen = set(user_input.get("include", [])) if user_input is not None else {ref_key(c) for c in singles}
             excluded = [ref_key(c) for c in singles if ref_key(c) not in chosen]
-            return self._finish(excluded)
+            return await self._finish(excluded)
         options = [selector.SelectOptionDict(value=ref_key(c), label=f"{c.label} = {self._value(c)}") for c in singles]
         default = [ref_key(c) for c in singles if ref_key(c) not in excluded_before]
         schema = vol.Schema(
@@ -238,7 +269,8 @@ class _MergeSteps:
         )
         return self._show("entities", {}, schema)
 
-    def _finish(self, excluded: list[str]) -> ConfigFlowResult:
+    async def _finish(self, excluded: list[str]) -> ConfigFlowResult:
+        self._excluded = excluded
         prior_ids = {e[E_KEY]: e[E_ENTITY_ID] for e in self._previous.get(CONF_ENTITIES, [])}
         name_slug = slugify(self._opts[CONF_NAME])
         used_keys: set[str] = set()
@@ -286,7 +318,57 @@ class _MergeSteps:
             CONF_EXCLUDED: excluded,
             CONF_SEEN: [ref_key(c) for c in self._candidates],
         }
-        return self._create(options)
+        self._result = options
+        return await self.async_step_confirm()
+
+    # Step: show the finished device before creating it
+    def _summary(self, entities: list[dict[str, Any]]) -> str:
+        by_ref = {ref_key(c): c for c in self._candidates}
+
+        def cell(text: str) -> str:
+            return text.replace("|", "\\|")
+
+        merged = ["| Entity | Sources | Combine |", "|---|---|---|"]
+        single = ["| Entity | From | Value |", "|---|---|---|"]
+        for item in entities:
+            members = [m for m in (by_ref.get("|".join(r)) for r in item[E_SOURCES]) if m]
+            name = f"{cell(item[E_NAME])} (`{item[E_ENTITY_ID]}`)"
+            if len(members) > 1:
+                sources = ", ".join(f"{m.device_tag} {cell(self._value(m))}" for m in members)
+                merged.append(f"| {name} | {sources} | {STRATEGY_LABELS.get(item[E_STRATEGY], item[E_STRATEGY])} |")
+            elif members:
+                single.append(f"| {name} | {members[0].device_tag} | {cell(self._value(members[0]))} |")
+        parts = [f"**Merged ({len(merged) - 2})**", "\n".join(merged)] if len(merged) > 2 else []
+        if len(single) > 2:
+            parts += [f"**From one device only ({len(single) - 2})**", "\n".join(single)]
+        return "\n\n".join(parts) or "Nothing to create."
+
+    async def async_step_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            action = user_input.get(ACTION, ACTION_CREATE)
+            if action == ACTION_CREATE:
+                return self._create(self._result)
+            if action == ACTION_REVIEW_ALL:
+                self._opts = {**self._opts, CONF_REVIEW_ALL: True}
+            return await self.async_step_pairing()
+        actions = [
+            selector.SelectOptionDict(value=ACTION_CREATE, label="Looks good, create it"),
+            selector.SelectOptionDict(value=ACTION_BACK, label="Go back and change"),
+        ]
+        if not self._review_all:
+            actions.append(selector.SelectOptionDict(value=ACTION_REVIEW_ALL, label="Go back and review everything"))
+        schema = vol.Schema(
+            {
+                vol.Required(ACTION, default=ACTION_CREATE): selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=actions, mode=selector.SelectSelectorMode.LIST)
+                )
+            }
+        )
+        return self.async_show_form(
+            step_id="confirm",
+            data_schema=schema,
+            description_placeholders={"legend": self._legend, "summary": self._summary(self._result[CONF_ENTITIES])},
+        )
 
     def _create(self, options: dict[str, Any]) -> ConfigFlowResult:
         raise NotImplementedError
