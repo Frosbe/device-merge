@@ -19,6 +19,7 @@ from .const import (
     CONF_MODEL,
     CONF_NAME,
     CONF_PICTURE,
+    CONF_REVIEW_ALL,
     CONF_TAKE_OVER_IDS,
     DOMAIN,
     E_DOMAIN,
@@ -32,10 +33,22 @@ from .const import (
     STRATEGY_SEPARATE,
     STRATEGY_SINGLE,
 )
-from .matching import Candidate, Group, auto_match, build_groups, collect, compatible, device_legend, ref_key
+from .matching import (
+    Candidate,
+    Group,
+    affinity,
+    auto_match,
+    build_groups,
+    class_counter,
+    collect,
+    compatible,
+    device_legend,
+    ref_key,
+)
 
 CONF_PAIRING = "pairing"
 CONF_EXCLUDED = "excluded"
+CONF_SEEN = "seen"
 OWN = "__own__"
 MAX_VALUE_LEN = 24
 
@@ -55,6 +68,7 @@ def _general_schema(defaults: dict[str, Any], with_devices: bool) -> vol.Schema:
             vol.Optional(CONF_PICTURE, default=defaults.get(CONF_PICTURE, "")): selector.TextSelector(),
             vol.Required(CONF_HIDE_SOURCES, default=defaults.get(CONF_HIDE_SOURCES, True)): selector.BooleanSelector(),
             vol.Required(CONF_TAKE_OVER_IDS, default=defaults.get(CONF_TAKE_OVER_IDS, False)): selector.BooleanSelector(),
+            vol.Required(CONF_REVIEW_ALL, default=defaults.get(CONF_REVIEW_ALL, False)): selector.BooleanSelector(),
         }
     )
     return vol.Schema(fields)
@@ -80,14 +94,30 @@ class _MergeSteps:
     _strategies: dict[str, str]
     _legend: str
     _shown: dict[str, dict[str, Any]]
+    _unsure: set[str]
+    _reviewed: set[str]
 
     def _start_matching(self) -> None:
         self._candidates = collect(self.hass, self._opts[CONF_DEVICES])
         self._legend = device_legend(self.hass, self._opts[CONF_DEVICES])
         self._shown = {}
+        self._reviewed = set()
         refs = {ref_key(c) for c in self._candidates}
-        previous = {k: v for k, v in self._previous.get(CONF_PAIRING, {}).items() if k in refs}
-        self._pairing = previous if self._previous.get(CONF_PAIRING) is not None else auto_match(self._candidates)
+        suggested, self._unsure = auto_match(self._candidates)
+        if self._previous.get(CONF_PAIRING) is not None:
+            # Keep earlier choices; only entities that are new since then count as unsure.
+            known = set(self._previous.get(CONF_SEEN, [])) | set(self._previous[CONF_PAIRING])
+            self._pairing = {k: v for k, v in self._previous[CONF_PAIRING].items() if k in refs}
+            for ref, anchor in suggested.items():
+                if ref not in known:
+                    self._pairing.setdefault(ref, anchor)
+            self._unsure = {r for r in self._unsure if r not in known}
+        else:
+            self._pairing = suggested
+
+    @property
+    def _review_all(self) -> bool:
+        return bool(self._opts.get(CONF_REVIEW_ALL))
 
     def _value(self, cand: Candidate) -> str:
         """Current value of a candidate, for the labels."""
@@ -107,10 +137,12 @@ class _MergeSteps:
     def _pairing_fields(self) -> dict[str, tuple[Candidate, list[Candidate]]]:
         used: set[str] = set()
         fields: dict[str, tuple[Candidate, list[Candidate]]] = {}
+        class_counts = class_counter(self._candidates)
         for cand in self._candidates:
-            if cand.device_index == 0:
+            if cand.device_index == 0 or not (self._review_all or ref_key(cand) in self._unsure):
                 continue
             options = [c for c in self._candidates if c.device_index < cand.device_index and compatible(c, cand)]
+            options.sort(key=lambda o: affinity(o, cand, class_counts), reverse=True)  # likeliest first
             if options:
                 fields[_unique(f"{cand.label} = {self._value(cand)}", used)] = (cand, options)
         return fields
@@ -126,6 +158,7 @@ class _MergeSteps:
                         self._pairing.pop(ref_key(cand), None)
                     else:
                         self._pairing[ref_key(cand)] = choice
+            self._reviewed = {ref_key(cand) for cand, _options in fields.values()}
             self._groups = build_groups(self._candidates, self._pairing)
             return await self.async_step_strategies()
         schema: dict[Any, Any] = {}
@@ -144,7 +177,8 @@ class _MergeSteps:
         used: set[str] = set()
         out: dict[str, Group] = {}
         for group in self._groups:
-            if len(group.members) > 1:
+            reviewed = self._review_all or any(ref_key(m) in self._reviewed for m in group.members)
+            if len(group.members) > 1 and reviewed:
                 values = ", ".join(f"{m.device_tag} {self._value(m)}" for m in group.members)
                 out[_unique(f"{group.name} ({group.domain}): {values}", used)] = group
         return out
@@ -154,21 +188,26 @@ class _MergeSteps:
         fields = fields or self._strategy_fields()
         previous = self._previous.get("strategies_by_anchor", {})
         if user_input is not None or not fields:
-            self._strategies = {}
+            # Groups not on the form keep their earlier choice or get the default.
+            self._strategies = {
+                ref_key(g.anchor): self._default_strategy(g, previous) for g in self._groups if len(g.members) > 1
+            }
             for label, group in fields.items():
-                choice = user_input.get(label, STRATEGY_FRESHEST) if user_input else STRATEGY_FRESHEST
-                self._strategies[ref_key(group.anchor)] = choice
+                self._strategies[ref_key(group.anchor)] = (user_input or {}).get(label, self._default_strategy(group, previous))
             return await self.async_step_entities()
         schema: dict[Any, Any] = {}
         for label, group in fields.items():
             options = [selector.SelectOptionDict(value=s, label=STRATEGY_LABELS[s]) for s in group.strategies()]
-            default = previous.get(ref_key(group.anchor), STRATEGY_FRESHEST)
-            if default not in group.strategies():
-                default = STRATEGY_FRESHEST
+            default = self._default_strategy(group, previous)
             schema[vol.Required(label, default=default)] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=options, mode=selector.SelectSelectorMode.DROPDOWN)
             )
         return self._show("strategies", fields, vol.Schema(schema))
+
+    @staticmethod
+    def _default_strategy(group: Group, previous: dict[str, str]) -> str:
+        choice = previous.get(ref_key(group.anchor)) or group.default_strategy()
+        return choice if choice in group.strategies() else STRATEGY_FRESHEST
 
     # Step: which unmerged entities to include
     def _single_candidates(self) -> list[Candidate]:
@@ -181,6 +220,9 @@ class _MergeSteps:
     async def async_step_entities(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         singles = self._single_candidates()
         excluded_before = set(self._previous.get(CONF_EXCLUDED, []))
+        if not self._review_all and user_input is None:
+            # Quick setup: include everything, keeping anything excluded earlier excluded.
+            return self._finish([ref_key(c) for c in singles if ref_key(c) in excluded_before])
         if user_input is not None or not singles:
             chosen = set(user_input.get("include", [])) if user_input is not None else {ref_key(c) for c in singles}
             excluded = [ref_key(c) for c in singles if ref_key(c) not in chosen]
@@ -242,6 +284,7 @@ class _MergeSteps:
             CONF_PAIRING: self._pairing,
             "strategies_by_anchor": self._strategies,
             CONF_EXCLUDED: excluded,
+            CONF_SEEN: [ref_key(c) for c in self._candidates],
         }
         return self._create(options)
 

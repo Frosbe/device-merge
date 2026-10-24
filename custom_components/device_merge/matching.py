@@ -11,7 +11,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.loader import IntegrationNotLoaded, async_get_loaded_integration
 from homeassistant.util import slugify
 
-from .const import DOMAIN, NUMERIC_STRATEGIES, ONOFF_STRATEGIES, OTHER_STRATEGIES, PLATFORMS
+from .const import DOMAIN, NUMERIC_STRATEGIES, ONOFF_STRATEGIES, OTHER_STRATEGIES, PLATFORMS, STRATEGY_FRESHEST, STRATEGY_MAX
 
 ONOFF_DOMAINS = {"binary_sensor", "switch", "lock", "cover"}
 COVER_LIKE = {"door", "opening", "garage_door", "window"}
@@ -19,8 +19,21 @@ COVER_LIKE = {"door", "opening", "garage_door", "window"}
 TARGET_PRIORITY = ["climate", "lock", "cover", "switch", "number", "select", "text", "button", "update", "device_tracker", "sensor", "binary_sensor"]
 
 STOPWORDS = {"level", "state", "status", "the", "of", "sensor", "value", "current", "is"}
-SYNONYMS = {"tpms": ["tire", "pressure"], "tyre": ["tire"], "temp": ["temperature"], "interior": ["inside"], "exterior": ["outside"]}
-MATCH_THRESHOLD = 0.5
+SYNONYMS = {
+    "tpms": ["tire", "pressure"],
+    "tyre": ["tire"],
+    "temp": ["temperature"],
+    "interior": ["inside"],
+    "exterior": ["outside"],
+    "occupied": ["present"],
+    "occupancy": ["present"],
+}
+# Entities of these domains get the domain as an extra word: a lock named "Doors" is a door lock.
+DOMAIN_WORDS = {"lock": "lock"}
+MATCH_THRESHOLD = 0.5  # pair automatically from here
+CONFIDENT = 0.75  # below this (or with a close runner-up) the pairing is shown for review
+SUGGEST = 0.25  # unpaired entities with a candidate this close are shown for review too
+AMBIGUOUS_GAP = 0.1
 
 
 @dataclass
@@ -84,9 +97,17 @@ class Group:
             return NUMERIC_STRATEGIES
         return OTHER_STRATEGIES
 
+    def default_strategy(self) -> str:
+        """Counters that only go up (odometer, energy totals) take the highest value, the rest the freshest."""
+        if all((m.entry.capabilities or {}).get("state_class") == "total_increasing" for m in self.members):
+            return STRATEGY_MAX
+        return STRATEGY_FRESHEST
 
-def _tokens(name: str) -> set[str]:
+
+def _tokens(name: str, domain: str | None = None) -> set[str]:
     words = re.sub(r"[^a-z0-9]+", " ", name.lower()).split()
+    if domain in DOMAIN_WORDS:
+        words.append(DOMAIN_WORDS[domain])
     out: set[str] = set()
     for word in words:
         for token in SYNONYMS.get(word, [word]):
@@ -97,11 +118,12 @@ def _tokens(name: str) -> set[str]:
 
 
 def _stem(word: str) -> str:
-    """Very light stemming so charger/charging, door/doors, lock/locked compare equal."""
+    """Very light stemming so charge/charger/charging, door/doors, lock/locked compare equal."""
     for suffix in ("ing", "er", "ed", "s"):
         if len(word) > len(suffix) + 3 and word.endswith(suffix):
-            return word[: -len(suffix)]
-    return word
+            word = word[: -len(suffix)]
+            break
+    return word[:-1] if len(word) > 4 and word.endswith("e") else word
 
 
 def _kind(c: Candidate) -> tuple[str, str | None]:
@@ -141,7 +163,7 @@ def compatible(a: Candidate, b: Candidate) -> bool:
 
 
 def score(a: Candidate, b: Candidate) -> float:
-    ta, tb = _tokens(a.name), _tokens(b.name)
+    ta, tb = _tokens(a.name, a.entry.domain), _tokens(b.name, b.entry.domain)
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / len(ta | tb)
@@ -196,37 +218,53 @@ def collect(hass: HomeAssistant, device_ids: list[str]) -> list[Candidate]:
     return out
 
 
-def auto_match(candidates: list[Candidate]) -> dict[str, str]:
-    """Suggested pairing: ref of a later-device candidate -> ref of the group anchor it joins."""
+def affinity(a: Candidate, b: Candidate, class_counts: Counter) -> float:
+    """How likely a and b are the same thing (name overlap plus device class hints)."""
+    value = score(a, b)
+    if a.entry.domain != b.entry.domain:
+        value -= 0.15  # prefer a same-domain partner
+    if (
+        a.device_class
+        and a.device_class == b.device_class
+        and class_counts[(a.device_index, a.entry.domain, a.device_class)] == 1
+        and class_counts[(b.device_index, b.entry.domain, b.device_class)] == 1
+    ):
+        value += 0.4  # the only entity of this kind on both devices
+    return value
+
+
+def class_counter(candidates: list[Candidate]) -> Counter:
+    return Counter((c.device_index, c.entry.domain, c.device_class) for c in candidates if c.device_class)
+
+
+def auto_match(candidates: list[Candidate]) -> tuple[dict[str, str], set[str]]:
+    """Suggested pairing (later-device ref -> ref of the group anchor it joins) and the refs worth a human look."""
     groups: list[Group] = []
     pairing: dict[str, str] = {}
-    class_counts = Counter((c.device_index, c.entry.domain, c.device_class) for c in candidates if c.device_class)
+    unsure: set[str] = set()
+    class_counts = class_counter(candidates)
     for cand in candidates:
-        best: tuple[float, Group] | None = None
-        for group in groups:
-            if any(m.device_index == cand.device_index for m in group.members):
-                continue
-            if not compatible(group.anchor, cand):
-                continue
-            value = score(group.anchor, cand)
-            a = group.anchor
-            if a.entry.domain != cand.entry.domain:
-                value -= 0.15  # prefer a same-domain partner
-            if (
-                a.device_class
-                and a.device_class == cand.device_class
-                and class_counts[(a.device_index, a.entry.domain, a.device_class)] == 1
-                and class_counts[(cand.device_index, cand.entry.domain, cand.device_class)] == 1
-            ):
-                value += 0.4  # the only entity of this kind on both devices
-            if value >= MATCH_THRESHOLD and (best is None or value > best[0]):
-                best = (value, group)
-        if best:
-            best[1].members.append(cand)
-            pairing[ref_key(cand)] = ref_key(best[1].anchor)
+        ranked = sorted(
+            (
+                (affinity(group.anchor, cand, class_counts), index)
+                for index, group in enumerate(groups)
+                if not any(m.device_index == cand.device_index for m in group.members) and compatible(group.anchor, cand)
+            ),
+            reverse=True,
+        )
+        best = ranked[0][0] if ranked else None
+        if best is not None and best >= MATCH_THRESHOLD:
+            group = groups[ranked[0][1]]
+            group.members.append(cand)
+            pairing[ref_key(cand)] = ref_key(group.anchor)
+            runner_up = ranked[1][0] if len(ranked) > 1 else None
+            if best < CONFIDENT or (runner_up is not None and best - runner_up < AMBIGUOUS_GAP):
+                unsure.add(ref_key(cand))
         else:
             groups.append(Group([cand]))
-    return pairing
+            if best is not None and best >= SUGGEST:
+                unsure.add(ref_key(cand))
+    return pairing, unsure
 
 
 def build_groups(candidates: list[Candidate], pairing: dict[str, str]) -> list[Group]:

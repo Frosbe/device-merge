@@ -11,16 +11,17 @@
           "model": "Model (optional)",
           "picture": "Picture for the trackers (optional, e.g. /local/car.jpg)",
           "hide_sources": "Hide the source entities",
-          "take_over_ids": "Take over the first device's entity ids (renames its entities)"
+          "take_over_ids": "Take over the first device's entity ids (renames its entities)",
+          "review_all": "Review everything (otherwise only pairings the automatic matching is unsure about are shown)"
         }
       },
       "pairing": {
         "title": "Pair entities",
-        "description": "For each entity of a later device, choose which entity of an earlier device it is the same as, or keep it on its own. Suggestions are pre-filled.\n\n{legend}\n\nEach line shows the device letter, the entity, its domain and its current value."
+        "description": "Only the pairings the automatic matching is unsure about are shown (all of them if you chose to review everything); the rest uses the suggestions. For each entity, pick the entity of an earlier device it is the same as (likeliest first), or keep it on its own.\n\n{legend}"
       },
       "strategies": {
         "title": "Combine values",
-        "description": "How should each merged value be combined? The labels show every device's current value.\n\n{legend}"
+        "description": "How should each merged value be combined? Shown for the pairings you reviewed; the rest uses Freshest (Maximum for counters such as the odometer). The labels show every device's current value.\n\n{legend}"
       },
       "entities": {
         "title": "Other entities",
@@ -44,16 +45,17 @@
           "model": "Model (optional)",
           "picture": "Picture for the trackers (optional, e.g. /local/car.jpg)",
           "hide_sources": "Hide the source entities",
-          "take_over_ids": "Take over the first device's entity ids (renames its entities)"
+          "take_over_ids": "Take over the first device's entity ids (renames its entities)",
+          "review_all": "Review everything (otherwise only pairings the automatic matching is unsure about are shown)"
         }
       },
       "pairing": {
         "title": "Pair entities",
-        "description": "For each entity of a later device, choose which entity of an earlier device it is the same as, or keep it on its own.\n\n{legend}\n\nEach line shows the device letter, the entity, its domain and its current value."
+        "description": "Only the pairings the automatic matching is unsure about are shown (all of them if you chose to review everything); the rest uses the suggestions. For each entity, pick the entity of an earlier device it is the same as (likeliest first), or keep it on its own.\n\n{legend}"
       },
       "strategies": {
         "title": "Combine values",
-        "description": "How should each merged value be combined? The labels show every device's current value.\n\n{legend}"
+        "description": "How should each merged value be combined? Shown for the pairings you reviewed; the rest uses Freshest (Maximum for counters such as the odometer). The labels show every device's current value.\n\n{legend}"
       },
       "entities": {
         "title": "Other entities",

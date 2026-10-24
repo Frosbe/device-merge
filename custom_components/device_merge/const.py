@@ -9,6 +9,7 @@ CONF_MODEL = "model"
 CONF_PICTURE = "picture"
 CONF_HIDE_SOURCES = "hide_sources"
 CONF_TAKE_OVER_IDS = "take_over_ids"
+CONF_REVIEW_ALL = "review_all"
 CONF_ENTITIES = "entities"
 
 # Per merged entity in CONF_ENTITIES
