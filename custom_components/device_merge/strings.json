@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Merge devices",
+        "description": "Pick two or more devices, in priority order (the first one owns the controls). The next steps let you pair entities and choose how each pair is combined.",
+        "data": {
+          "name": "Name of the merged device",
+          "devices": "Devices to merge",
+          "manufacturer": "Manufacturer (optional)",
+          "model": "Model (optional)",
+          "picture": "Picture for the trackers (optional, e.g. /local/car.jpg)",
+          "hide_sources": "Hide the source entities",
+          "take_over_ids": "Take over the first device's entity ids (renames its entities)"
+        }
+      },
+      "pairing": {
+        "title": "Pair entities",
+        "description": "For each entity of a later device, choose which entity of an earlier device it is the same as, or keep it on its own. Suggestions are pre-filled."
+      },
+      "strategies": {
+        "title": "Combine values",
+        "description": "How should each merged value be combined?"
+      },
+      "entities": {
+        "title": "Other entities",
+        "description": "Entities that only one device has. Ticked ones are added to the merged device.",
+        "data": {"include": "Include"}
+      }
+    },
+    "error": {
+      "need_two_devices": "Pick at least two devices."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Merged device settings",
+        "data": {
+          "name": "Name of the merged device",
+          "manufacturer": "Manufacturer (optional)",
+          "model": "Model (optional)",
+          "picture": "Picture for the trackers (optional, e.g. /local/car.jpg)",
+          "hide_sources": "Hide the source entities",
+          "take_over_ids": "Take over the first device's entity ids (renames its entities)"
+        }
+      },
+      "pairing": {
+        "title": "Pair entities",
+        "description": "For each entity of a later device, choose which entity of an earlier device it is the same as, or keep it on its own."
+      },
+      "strategies": {
+        "title": "Combine values",
+        "description": "How should each merged value be combined?"
+      },
+      "entities": {
+        "title": "Other entities",
+        "description": "Entities that only one device has. Ticked ones are added to the merged device.",
+        "data": {"include": "Include"}
+      }
+    }
+  }
+}

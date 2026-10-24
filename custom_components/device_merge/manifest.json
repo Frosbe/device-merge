@@ -1,0 +1,13 @@
+{
+  "domain": "device_merge",
+  "name": "Device Merge",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/frosbe/device-merge",
+  "integration_type": "helper",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/frosbe/device-merge/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
